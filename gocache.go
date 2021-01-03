@@ -70,7 +70,7 @@ func (g *Group) Get(key string) (ByteView, error) {
 		return ByteView{}, fmt.Errorf("key is required")
 	}
 	if v, ok := g.mainCache.get(key); ok {
-		log.Println("[Cache] hitted")
+		log.Println("[Cache] hit")
 		return v, nil
 	}
 	//缓存不存在
