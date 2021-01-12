@@ -4,30 +4,37 @@
 * @Desc:
  */
 
-package lru
+package GoCacheDemo
 
 import (
 	"fmt"
-	"github.com/ztaoing/GoCacheDemo"
+	"github.com/ztaoing/GoCacheDemo/consistenthash"
 	"log"
 	"net/http"
 	"strings"
+	"sync"
 )
 
 // 分布式缓存需要实现节点之间的通信，建立基本的HTTP的通信机制是比较常见和简单的做法。
 // 如果一个节点启动了http服务，那么这个节点就可以被其他节点访问
 
-const defaultBathPaht = "/gocache/"
+const (
+	defaultBathPath = "/gocache/"
+	defaultReplicas = 50
+)
 
 type HTTPPool struct {
-	self     string // record the address it`s self ,including host name and port
-	basePath string // http.example.com/gocache/
+	self        string // record the address it`s self ,including host name and port
+	basePath    string // http.example.com/gocache/
+	mu          sync.Mutex
+	peers       *consistenthash.Map
+	httpGetters map[string]*HttpGetter //映射远程节点对应的HttpGetter。每一个远程节点对应一个HttpGetter
 }
 
 func NewHTTPPool(self string) *HTTPPool {
 	return &HTTPPool{
 		self:     self,
-		basePath: defaultBathPaht,
+		basePath: defaultBathPath,
 	}
 }
 
@@ -51,7 +58,7 @@ func (h *HTTPPool) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	groupName := parts[0]
 	key := parts[1]
 
-	group := GoCacheDemo.GetGroup(groupName)
+	group := GetGroup(groupName)
 	if group == nil {
 		http.Error(w, "no such group:"+groupName, http.StatusNotFound)
 		return
@@ -65,4 +72,30 @@ func (h *HTTPPool) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Write(view.ByteSlice())
+}
+
+func (h *HTTPPool) PickPeer(key string) (PeerGetter, bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	if peer := h.peers.Get(key); peer != "" && peer != h.self {
+		h.Log("Pick peer %s", peer)
+		return h.httpGetters[peer], true
+	}
+	return nil, false
+}
+
+//实例化一个一致性hash算法，并且添加了传入的节点，并为每一个节点创建一个http客户端httpGetter
+func (h *HTTPPool) Set(peers ...string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	h.peers = consistenthash.NewMap(defaultReplicas, nil)
+	h.peers.AddMap(peers...)
+	h.httpGetters = make(map[string]*HttpGetter, len(peers))
+	for _, peer := range peers {
+		h.httpGetters[peer] = &HttpGetter{
+			baseUrl: peer + h.basePath,
+		}
+	}
 }

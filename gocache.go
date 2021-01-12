@@ -8,6 +8,7 @@ package GoCacheDemo
 
 import (
 	"fmt"
+	"github.com/ztaoing/GoCacheDemo/singleflight"
 	"log"
 	"sync"
 )
@@ -32,6 +33,8 @@ type Group struct {
 	name      string // 每个group拥有一个唯一的名称：例如有三个group：学生的成绩scores；学生信息info；学生课程courses
 	getter    Getter // 缓存未命中时获取源数据的回调方法
 	mainCache cache  // 并发缓存
+	peers     PeerPicker
+	loader    *singleflight.Group
 }
 
 var (
@@ -50,6 +53,7 @@ func NewGroup(name string, cacheBytes int64, getter Getter) *Group {
 		name:      name,
 		getter:    getter,
 		mainCache: cache{cacheBytes: cacheBytes},
+		loader:    &singleflight.Group{},
 	}
 
 	groups[name] = g
@@ -78,8 +82,24 @@ func (g *Group) Get(key string) (ByteView, error) {
 }
 
 func (g *Group) load(key string) (value ByteView, err error) {
-	//分布式场景下，load先从远程节点获取，失败后再回退到getLocally
-	return g.getLocally(key)
+	// only one request for the key can be do at the same time
+	viewi, err := g.loader.Do(key, func() (interface{}, error) {
+		//分布式场景下，load先从远程节点获取，失败后再回退到getLocally
+		if g.peers != nil {
+			if peer, ok := g.peers.PickPeer(key); ok {
+				if value, err = g.getFromPeer(peer, key); err == nil {
+					return value, nil
+				}
+				log.Println("[CacheDemo]Failed to get from peer ", err)
+			}
+		}
+		return g.getLocally(key)
+	})
+	if err != nil {
+		return viewi.(ByteView), err
+	}
+	return
+
 }
 
 //
@@ -99,6 +119,23 @@ func (g *Group) getLocally(key string) (ByteView, error) {
 	return value, nil
 }
 
+func (g *Group) getFromPeer(peer PeerGetter, key string) (ByteView, error) {
+	bytes, err := peer.Get(g.name, key)
+	if err != nil {
+		return ByteView{}, err
+	}
+	return ByteView{
+		b: bytes,
+	}, nil
+}
+
 func (g *Group) putCache(key string, value ByteView) {
 	g.mainCache.add(key, value)
+}
+
+func (g *Group) RegisterPeers(peers PeerPicker) {
+	if g.peers != nil {
+		panic("RegisterPeers called more than one time")
+	}
+	g.peers = peers
 }
