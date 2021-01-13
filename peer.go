@@ -8,6 +8,8 @@ package GoCacheDemo
 
 import (
 	"fmt"
+	"github.com/golang/protobuf/proto"
+	"github.com/ztaoing/GoCacheDemo/pb"
 	"io/ioutil"
 	"net/http"
 	"net/url"
@@ -20,30 +22,33 @@ type PeerPicker interface {
 
 // 从对应的group查找缓存之
 type PeerGetter interface {
-	Get(group, key string) ([]byte, error)
+	Get(in *pb.Request, out *pb.Response) error
 }
 
 type HttpGetter struct {
 	baseUrl string
 }
 
-func (h *HttpGetter) Get(group, key string) ([]byte, error) {
+func (h *HttpGetter) Get(in *pb.Request, out *pb.Response) error {
 	// remote url
-	u := fmt.Sprintf("%v,%v/%v", h.baseUrl, url.QueryEscape(group), url.QueryEscape(key))
+	u := fmt.Sprintf("%v,%v/%v", h.baseUrl, url.QueryEscape(in.GetGroup()), url.QueryEscape(in.GetKey()))
 	res, err := http.Get(u)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	defer res.Body.Close()
 	if res.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("server return:%v", res.Status)
+		return fmt.Errorf("server return:%v", res.Status)
 	}
 
-	bytes, err := ioutil.ReadAll(res.Body)
+	protos, err := ioutil.ReadAll(res.Body)
 	if err != nil {
-		return nil, fmt.Errorf("reading body:%v", err)
+		return fmt.Errorf("reading body:%v", err)
+	}
+	if err = proto.Unmarshal(protos, out); err != nil {
+		return fmt.Errorf("decode response body:%v ", err)
 	}
 
-	return bytes, nil
+	return nil
 }

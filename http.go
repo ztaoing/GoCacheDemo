@@ -8,7 +8,9 @@ package GoCacheDemo
 
 import (
 	"fmt"
+	"github.com/golang/protobuf/proto"
 	"github.com/ztaoing/GoCacheDemo/consistenthash"
+	"github.com/ztaoing/GoCacheDemo/pb"
 	"log"
 	"net/http"
 	"strings"
@@ -65,13 +67,15 @@ func (h *HTTPPool) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	view, err := group.Get(key)
+	//write the value to proto buffer
+	body, err := proto.Marshal(&pb.Response{Value: view.ByteSlice()})
 	if err != nil {
 		// todo:为什么是服务端错误
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "application/octet-stream")
-	w.Write(view.ByteSlice())
+	w.Write(body)
 }
 
 func (h *HTTPPool) PickPeer(key string) (PeerGetter, bool) {
